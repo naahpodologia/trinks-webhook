@@ -27,9 +27,16 @@ final class Armazenamento
 
     private function dia(): string { return gmdate('Y-m-d'); }
 
-    public function jaVisto(string $id): bool
+    public function jaVisto(string $id): bool { return $this->contem('vistos.txt', $id); }
+    public function jaRepassado(string $chave): bool { return $this->contem('repassados.txt', $chave); }
+    public function marcarRepassado(string $chave): void
     {
-        $arq = $this->pasta . '/vistos.txt';
+        file_put_contents($this->pasta . '/repassados.txt', $chave . "\n", FILE_APPEND | LOCK_EX);
+    }
+
+    private function contem(string $nome, string $id): bool
+    {
+        $arq = $this->pasta . '/' . $nome;
         if ($id === '' || !is_file($arq)) return false;
         $h = fopen($arq, 'r');
         while (($l = fgets($h)) !== false) {

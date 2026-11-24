@@ -40,7 +40,12 @@ try {
     [$status, $resposta] = $receptor->processar(
         $corpo,
         $_SERVER['HTTP_X_AMZ_SNS_MESSAGE_TYPE'] ?? null,
-        isset($_GET['token']) ? (string)$_GET['token'] : null
+        isset($_GET['token']) ? (string)$_GET['token'] : null,
+        [
+            'x-amz-sns-subscription-arn' => $_SERVER['HTTP_X_AMZ_SNS_SUBSCRIPTION_ARN'] ?? null,
+            'x-amz-sns-rawdelivery' => $_SERVER['HTTP_X_AMZ_SNS_RAWDELIVERY'] ?? null,
+            'user-agent' => $_SERVER['HTTP_USER_AGENT'] ?? null,
+        ]
     );
     responder($status, $resposta);
 } catch (Throwable $e) {
