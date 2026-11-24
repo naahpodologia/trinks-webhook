@@ -1,0 +1,13 @@
+Options -Indexes
+<IfModule mod_rewrite.c>
+RewriteEngine On
+# Bloqueia código interno, testes, dados, configuração e arquivos ocultos
+RewriteRule ^\.well-known/ - [L]
+RewriteRule (^|/)\. - [F,L]
+RewriteRule ^(lib|tests|dados|scripts)(/|$) - [F,L]
+RewriteRule ^(config|config\.exemplo)\.php$ - [F,L]
+RewriteRule \.(md|json|jsonl|txt|pem)$ - [F,L]
+# Todo o resto vai para o index.php
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteRule ^ index.php [L]
+</IfModule>

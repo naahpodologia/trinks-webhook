@@ -1,0 +1,191 @@
+<?php
+// Testes sem dependências. Rodar com:  php tests/rodar.php
+declare(strict_types=1);
+require_once __DIR__ . '/../lib/Receptor.php';
+
+$falhas = 0; $total = 0;
+function teste(string $nome, callable $f): void {
+    global $falhas, $total; $total++;
+    try { $f(); echo "ok   $nome\n"; }
+    catch (Throwable $e) { $falhas++; echo "FALHA $nome: {$e->getMessage()}\n"; }
+}
+function igual($esperado, $obtido, string $msg = ''): void {
+    if ($esperado !== $obtido) throw new Exception("$msg esperado " . var_export($esperado, true) . ', obtido ' . var_export($obtido, true));
+}
+function verdade($v, string $msg = 'esperado verdadeiro'): void { if (!$v) throw new Exception($msg); }
+
+// ---- Chave de teste e mensagens assinadas como a AWS faria ----
+$chave = openssl_pkey_new(['private_key_bits' => 2048, 'private_key_type' => OPENSSL_KEYTYPE_RSA]);
+$publica = openssl_pkey_get_details($chave)['key'];
+const CERT_URL = 'https://sns.us-east-1.amazonaws.com/SimpleNotificationService-teste.pem';
+const TOPICO = 'arn:aws:sns:us-east-1:123456789012:trinks-webhook-teste';
+$baixar = function (string $url) use ($publica) { if ($url !== CERT_URL) throw new Exception('url inesperada'); return $publica; };
+
+function assinar(array $m, string $versao = '1'): array {
+    global $chave;
+    $m['SignatureVersion'] = $versao; $m['SigningCertURL'] = CERT_URL;
+    openssl_sign(Sns::textoParaAssinar($m), $sig, $chave, $versao === '2' ? OPENSSL_ALGO_SHA256 : OPENSSL_ALGO_SHA1);
+    $m['Signature'] = base64_encode($sig);
+    return $m;
+}
+function notificacao(array $payload): array {
+    return assinar(['Type' => 'Notification', 'MessageId' => bin2hex(random_bytes(8)), 'TopicArn' => TOPICO,
+        'Subject' => 'Trinks', 'Message' => json_encode($payload), 'Timestamp' => gmdate('c')]);
+}
+function confirmacao(): array {
+    return assinar(['Type' => 'SubscriptionConfirmation', 'MessageId' => 'c-1', 'Token' => 'tk', 'TopicArn' => TOPICO,
+        'Message' => 'You have chosen to subscribe...', 'Timestamp' => gmdate('c'),
+        'SubscribeURL' => 'https://sns.us-east-1.amazonaws.com/?Action=ConfirmSubscription&TopicArn=' . TOPICO . '&Token=tk']);
+}
+function payload(string $arq): array { return json_decode(file_get_contents(__DIR__ . "/payloads/$arq"), true); }
+function pastaTemp(): string { $d = sys_get_temp_dir() . '/trinks-' . bin2hex(random_bytes(4)); mkdir($d); return $d; }
+
+function receptor(array $cfg = [], array $deps = []): array {
+    global $baixar;
+    $dados = new Armazenamento(pastaTemp());
+    $recebidos = new ArrayObject();
+    $r = new Receptor($cfg, $dados, $deps + [
+        'verificar' => fn($m) => Sns::verificar($m, $baixar),
+        'confirmar' => fn($m) => ['subscriptionArn' => 'arn:teste'],
+        'aoReceber' => function ($ev) use ($recebidos) { $recebidos[] = $ev; },
+    ]);
+    return [$r, $dados, $recebidos];
+}
+$enviar = fn(Receptor $r, array $m, ?string $token = null) => $r->processar(json_encode($m), $m['Type'], $token);
+
+// ---- SNS ----
+teste('aceita assinatura válida (versões 1 e 2)', function () use ($baixar) {
+    foreach (['1', '2'] as $v) {
+        $m = assinar(['Type' => 'Notification', 'MessageId' => 'x', 'TopicArn' => TOPICO, 'Message' => '{}', 'Timestamp' => 't'], $v);
+        igual([true, null], Sns::verificar($m, $baixar));
+    }
+});
+teste('rejeita mensagem adulterada', function () use ($baixar) {
+    $m = notificacao(['TipoDeEvento' => 1, 'Action' => 1, 'ValorDaCompra' => '10']);
+    $m['Message'] = str_replace('"10"', '"99999"', $m['Message']);
+    igual([false, 'assinatura inválida'], Sns::verificar($m, $baixar));
+});
+teste('rejeita certificado fora da AWS', function () use ($baixar) {
+    $m = notificacao([]); $m['SigningCertURL'] = 'https://sns.us-east-1.amazonaws.com.atacante.com/c.pem';
+    igual(false, Sns::verificar($m, $baixar)[0]);
+});
+teste('valida URLs da AWS SNS', function () {
+    verdade(Sns::urlDaAws('https://sns.sa-east-1.amazonaws.com/x.pem', true));
+    verdade(!Sns::urlDaAws('http://sns.sa-east-1.amazonaws.com/x.pem'));
+    verdade(!Sns::urlDaAws('https://evil.com/sns.us-east-1.amazonaws.com'));
+    verdade(!Sns::urlDaAws('https://sns.sa-east-1.amazonaws.com/x.txt', true));
+    verdade(!Sns::urlDaAws('https://sns.sa-east-1.amazonaws.com:8443/x.pem', true));
+});
+teste('confirmação chama a SubscribeURL e lê o ARN', function () {
+    $chamada = null;
+    $r = Sns::confirmarInscricao(confirmacao(), function ($u) use (&$chamada) { $chamada = $u;
+        return '<ConfirmSubscriptionResult><SubscriptionArn>arn:aws:sns:us-east-1:1:t:abc</SubscriptionArn></ConfirmSubscriptionResult>'; });
+    verdade(str_starts_with($chamada, 'https://sns.us-east-1.amazonaws.com/?Action=ConfirmSubscription'));
+    igual('arn:aws:sns:us-east-1:1:t:abc', $r['subscriptionArn']);
+});
+teste('confirmação recusa SubscribeURL fora da AWS', function () {
+    $m = confirmacao(); $m['SubscribeURL'] = 'https://atacante.com/x';
+    try { Sns::confirmarInscricao($m, fn() => ''); throw new Exception('não recusou'); } catch (RuntimeException $e) {}
+});
+
+// ---- Eventos ----
+teste('converte números no formato brasileiro', function () {
+    igual(13.5, Eventos::numero('13,50')); igual(1234.56, Eventos::numero('1.234,56'));
+    igual(10.0, Eventos::numero('10')); igual(80.0, Eventos::numero(80)); igual(null, Eventos::numero(''));
+});
+teste('fechamento de conta', function () {
+    $ev = Eventos::ler(['MessageId' => 'm-1', 'Message' => json_encode(payload('01-fechamento-de-conta.json'))]);
+    igual('fechamento-de-conta', $ev['evento']); igual('inclusao', $ev['acao']);
+    igual(180.0, $ev['resumo']['valorDaCompra']); igual('servico', $ev['resumo']['itens'][0]['tipo']);
+    igual('Visa', $ev['resumo']['formasPagamento'][0]['forma']); igual('m-1', $ev['idUnico']);
+});
+teste('inclusão de cliente', function () {
+    $ev = Eventos::ler(['MessageId' => 'm', 'Message' => json_encode(payload('03-inclusao-de-cliente.json'))]);
+    igual('Nova Cliente', $ev['resumo']['nome']); igual('Balcão', $ev['resumo']['origem']);
+});
+teste('estoque usa IdEvento como id único', function () {
+    $ev = Eventos::ler(['MessageId' => 'm', 'Message' => json_encode(payload('14-movimentacao-de-estoque.json'))]);
+    igual('3f1d2c4b-0000-4000-8000-000000000014', $ev['idUnico']);
+    igual(13.5, $ev['resumo']['itens'][0]['custoTotal']); igual(1234.0, $ev['resumo']['itens'][0]['estoqueApos']);
+});
+teste('evento desconhecido não quebra', function () {
+    $ev = Eventos::ler(['MessageId' => 'm', 'Message' => '{"TipoDeEvento":99,"Action":7,"X":1}']);
+    igual(false, $ev['conhecido']); igual(1, $ev['payload']['X']);
+});
+
+// ---- Receptor ----
+teste('confirma inscrição automaticamente', function () use ($enviar) {
+    [$r, $d] = receptor();
+    [$s, $b] = $enviar($r, confirmacao());
+    igual(200, $s); igual(true, $b['confirmado']);
+    verdade(str_contains(file_get_contents($d->pasta() . '/inscricoes.jsonl'), 'confirmada'));
+});
+teste('recebe e grava os 4 exemplos', function () use ($enviar) {
+    [$r, $d, $rec] = receptor();
+    foreach (glob(__DIR__ . '/payloads/*.json') as $arq) {
+        [$s, $b] = $enviar($r, notificacao(json_decode(file_get_contents($arq), true)));
+        igual(200, $s, basename($arq)); igual(true, $b['ok'], basename($arq));
+    }
+    igual(4, count($rec));
+    $arqs = array_map('basename', glob($d->pasta() . '/eventos/' . gmdate('Y-m-d') . '/*.jsonl')); sort($arqs);
+    igual(['fechamento-de-conta.jsonl', 'inclusao-de-agendamento.jsonl', 'inclusao-de-cliente.jsonl', 'movimentacao-de-estoque.jsonl'], $arqs);
+});
+teste('ignora duplicados', function () use ($enviar) {
+    [$r, , $rec] = receptor();
+    $m = notificacao(['TipoDeEvento' => 3, 'Action' => 1]);
+    $enviar($r, $m); [, $b] = $enviar($r, $m);
+    igual(true, $b['duplicado']); igual(1, count($rec));
+});
+teste('assinatura inválida dá 403', function () use ($enviar) {
+    [$r, , $rec] = receptor();
+    $m = notificacao(['TipoDeEvento' => 1, 'Action' => 1]); $m['Message'] = '{"TipoDeEvento":1,"Action":3}';
+    igual(403, $enviar($r, $m)[0]); igual(0, count($rec));
+});
+teste('exige token quando configurado', function () use ($enviar) {
+    [$r] = receptor(['token' => 'segredo']);
+    $m = notificacao(['TipoDeEvento' => 3, 'Action' => 1]);
+    igual(401, $enviar($r, $m)[0]); igual(401, $enviar($r, $m, 'errado')[0]); igual(200, $enviar($r, $m, 'segredo')[0]);
+});
+teste('filtra TopicArn quando configurado', function () use ($enviar) {
+    [$r] = receptor(['topicos' => ['arn:aws:sns:us-east-1:1:outro']]);
+    igual(403, $enviar($r, notificacao(['TipoDeEvento' => 3, 'Action' => 1]))[0]);
+});
+teste('falha ao processar dá 500 e permite reenvio', function () use ($enviar) {
+    $falhar = true;
+    [$r] = receptor([], ['aoReceber' => function () use (&$falhar) { if ($falhar) throw new Exception('fora do ar'); }]);
+    $m = notificacao(['TipoDeEvento' => 1, 'Action' => 1]);
+    igual(500, $enviar($r, $m)[0]); $falhar = false; igual(200, $enviar($r, $m)[0]);
+});
+teste('Message ilegível responde 200 sem quebrar', function () use ($enviar) {
+    [$r] = receptor();
+    $m = assinar(['Type' => 'Notification', 'MessageId' => 'z', 'TopicArn' => TOPICO, 'Message' => 'não é json', 'Timestamp' => 't']);
+    [$s, $b] = $enviar($r, $m); igual(200, $s); igual(false, $b['ok']);
+});
+
+// ---- HTTP de verdade (php -S) com o index.php ----
+teste('index.php: health, 404, token e evento', function () {
+    $home = pastaTemp(); mkdir("$home/trinks-webhook");
+    file_put_contents("$home/trinks-webhook/config.php", "<?php return ['token' => 'tk123', 'aceitarSemAssinatura' => true];");
+    $porta = random_int(20000, 40000);
+    $proc = proc_open([PHP_BINARY, '-S', "127.0.0.1:$porta", __DIR__ . '/../index.php'], [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $p, null, ['HOME' => $home]);
+    try {
+        usleep(400000);
+        $req = function (string $metodo, string $caminho, ?string $corpo = null) use ($porta) {
+            $ctx = stream_context_create(['http' => ['method' => $metodo, 'ignore_errors' => true, 'content' => $corpo, 'header' => "Content-Type: text/plain\r\nx-amz-sns-message-type: Notification"]]);
+            $b = file_get_contents("http://127.0.0.1:$porta$caminho", false, $ctx);
+            preg_match('#HTTP/\S+ (\d+)#', $http_response_header[0], $r);
+            return [(int)$r[1], json_decode($b, true)];
+        };
+        igual(200, $req('GET', '/health')[0]);
+        igual(404, $req('GET', '/qualquer')[0]);
+        igual(405, $req('GET', '/webhook')[0]);
+        $msg = json_encode(['Type' => 'Notification', 'MessageId' => 'h1', 'Message' => json_encode(payload('03-inclusao-de-cliente.json')), 'Timestamp' => 't']);
+        igual(401, $req('POST', '/webhook', $msg)[0]);
+        [$s, $b] = $req('POST', '/webhook?token=tk123', $msg);
+        igual(200, $s); igual('inclusao-de-cliente', $b['evento']);
+        verdade(is_dir("$home/trinks-webhook/dados/eventos"), 'dados não gravados fora da pasta pública');
+    } finally { proc_terminate($proc); }
+});
+
+echo "\n$total testes, " . ($total - $falhas) . " ok, $falhas falha(s)\n";
+exit($falhas ? 1 : 0);
