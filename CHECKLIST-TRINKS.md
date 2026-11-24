@@ -20,7 +20,7 @@
 - [ ] **Limites de uso** (requisições por minuto) e custo, se houver.
 
 ## Do nosso lado, antes de mandar a URL
-- [ ] Publicar o receptor na Hostinger com HTTPS (depois da aprovação do Luiz).
+- [ ] Publicar o receptor em sync-k7q2.naah.com.br com HTTPS.
 - [ ] Conferir que `https://.../health` responde.
-- [ ] Definir `WEBHOOK_TOKEN` e `DATA_DIR` fora da pasta do app.
-- [ ] Depois do cadastro, ver `data/inscricoes.jsonl` mostrar "confirmada".
+- [ ] Criar o config.php com o token em /home/<usuario>/trinks-webhook/.
+- [ ] Depois do cadastro, ver `dados/inscricoes.jsonl` mostrar "confirmada".
