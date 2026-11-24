@@ -20,8 +20,8 @@ Para mandar os dados para outro lugar (planilha, banco, CRM), plugue uma funçã
 
 ## Endereços
 
-- Webhook: `POST https://sync-k7q2.naah.com.br/webhook?token=<token>`
-- Saúde: `GET https://sync-k7q2.naah.com.br/health` responde `{"ok":true}`
+- Webhook: `POST https://<subdominio>/webhook?token=<token>`
+- Saúde: `GET https://<subdominio>/health` responde `{"ok":true}`
 
 ## Configuração
 

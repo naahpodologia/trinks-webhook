@@ -20,7 +20,7 @@
 - [ ] **Limites de uso** (requisições por minuto) e custo, se houver.
 
 ## Do nosso lado, antes de mandar a URL
-- [ ] Publicar o receptor em sync-k7q2.naah.com.br com HTTPS.
+- [ ] Publicar o receptor em <subdominio> com HTTPS.
 - [ ] Conferir que `https://.../health` responde.
 - [ ] Criar o config.php com o token em /home/<usuario>/trinks-webhook/.
 - [ ] Depois do cadastro, ver `dados/inscricoes.jsonl` mostrar "confirmada".

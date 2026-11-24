@@ -1,7 +1,7 @@
 <?php
 // Copie para /home/<usuario>/trinks-webhook/config.php (fora da pasta pública) e ajuste.
 return [
-    // Senha longa exigida na URL: https://sync-k7q2.naah.com.br/webhook?token=ESTA_SENHA
+    // Senha longa exigida na URL: https://<subdominio>/webhook?token=ESTA_SENHA
     'token' => 'troque-por-uma-senha-longa',
 
     // Caminho do endpoint
