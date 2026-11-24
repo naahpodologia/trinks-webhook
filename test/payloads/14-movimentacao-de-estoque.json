@@ -1,0 +1,21 @@
+{
+  "Action": 1,
+  "TipoDeEvento": 14,
+  "IdEvento": "3f1d2c4b-0000-4000-8000-000000000014",
+  "Versao": "1.0",
+  "DataHoraEventoGerado": "2026-11-24 10:20:00",
+  "Origem": "BaixaAutomaticaNoAgendamento",
+  "IdDoEstabelecimento": 12345,
+  "Agendamento": { "IdDoAgendamento": 445566, "IdDoServicoNoEstabelecimento": 10, "NomeDoServicoNoEstabelecimento": "Podologia completa", "IdDoClienteNoEstabelecimento": 5501 },
+  "Itens": [
+    {
+      "IdDaMovimentacao": 9001, "TipoDeMovimentacao": 28, "DescricaoTipoDeMovimentacao": "Saída automática",
+      "IdDoProduto": 70, "NomeDoProduto": "Lâmina descartável", "CodigoDeBarras": "", "SKU": "LAM-01",
+      "UnidadeDeMedida": "un", "Quantidade": "-1", "TipoDeQuantidade": "PorUnidade",
+      "CustoMedio": "13,50", "CustoTotalDaMovimentacao": "13,50", "CustoParaOProfissional": "", "CustoParaOCliente": "",
+      "EstoqueDoProdutoAposAOperacao": "1.234,00", "DataMovimentacao": "2026-11-24 10:20:00",
+      "ProfissionalResponsavel": { "IdDoProfissional": 333, "IdDoProfissionalNoEstabelecimento": 44, "CodigoDeIntegracao": "", "Nome": "Podóloga" },
+      "IdDoClienteNoEstabelecimento": 5501, "Observacao": ""
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "_aviso": "Payload HIPOTÉTICO: a página deste evento não abriu. Ajustar quando tivermos um exemplo real.",
+  "IdDoEstabelecimento": 12345,
+  "IdDoAgendamento": 445566,
+  "IdDoClienteNoEstabelecimento": 5501,
+  "NomeDoCliente": "Cliente Exemplo",
+  "IdDoProfissionalNoEstabelecimento": 44,
+  "NomeDoServico": "Podologia completa",
+  "DataHoraInicio": "2026-11-28 14:00:00",
+  "Status": "Agendado",
+  "Action": 1,
+  "TipoDeEvento": 11
+}
