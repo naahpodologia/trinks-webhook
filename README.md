@@ -29,7 +29,7 @@ Para ligar, coloque no `config.php`:
 ```
 
 - Só mensagens com assinatura válida são repassadas. Pedidos de confirmação de inscrição não são repassados.
-- Se o destino estiver fora do ar ou responder erro, o receptor responde 500 ao SNS, que reenvia mais tarde. Do nosso lado o evento não é gravado duas vezes, e cada destino recebe cada mensagem uma vez só (`repassados.txt`).
+- Só a resposta 200 conta como entregue. Qualquer outro status, erro de rede ou timeout (10 s), o receptor responde 500 ao SNS, que reenvia mais tarde. Do nosso lado o evento não é gravado duas vezes, e cada destino recebe cada mensagem uma vez só (`repassados.txt`).
 - Cada repasse fica registrado no log do dia.
 
 ## Endereços
@@ -44,7 +44,7 @@ Copie `config.exemplo.php` para **`/home/<usuario>/trinks-webhook/config.php`**,
 ## Testar
 
 ```bash
-php tests/rodar.php     # 28 testes, inclusive um servidor HTTP de verdade
+php tests/rodar.php     # 29 testes, inclusive um servidor HTTP de verdade
 ```
 
 O `.htaccess` bloqueia o acesso pela web a `lib/`, `tests/`, configuração e arquivos de dados.

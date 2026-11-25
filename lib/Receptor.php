@@ -161,7 +161,7 @@ final class Receptor
                 $status = 0;
                 $this->dados->log('erro', 'repasse falhou', ['destino' => parse_url($url, PHP_URL_HOST), 'erro' => $e->getMessage(), 'messageId' => $id]);
             }
-            if ($status >= 200 && $status < 300) {
+            if ($status === 200) { // o Retorne só considera sucesso o 200; qualquer outro status, erro de rede ou timeout é reenviado
                 $this->dados->marcarRepassado($chave);
                 $this->dados->log('info', 'repassado', ['destino' => parse_url($url, PHP_URL_HOST), 'status' => $status, 'messageId' => $id]);
             } else {

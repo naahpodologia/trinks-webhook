@@ -198,6 +198,12 @@ teste('Retorne fora do ar: 500, e no reenvio repassa sem duplicar do nosso lado'
     igual(200, $s); igual(true, $b['duplicado'] ?? false); igual(1, count($rec)); igual(2, $chamadas);
     $enviar($r, $m); igual(2, $chamadas, 'repassou duas vezes a mesma mensagem');
 });
+teste('repasse só conta como entregue com 200 (201, 204, 302 são reenviados)', function () use ($enviar) {
+    foreach ([201, 204, 302, 400] as $cod) {
+        [$r] = receptor(['repassarPara' => ['https://retorne.exemplo/w']], ['enviar' => fn() => $cod]);
+        igual(500, $enviar($r, notificacao(['TipoDeEvento' => 3, 'Action' => 1]))[0], "status $cod");
+    }
+});
 teste('erro de rede no repasse também dá 500', function () use ($enviar) {
     [$r] = receptor(['repassarPara' => ['https://retorne.exemplo/w']], ['enviar' => function () { throw new RuntimeException('timeout'); }]);
     igual(500, $enviar($r, notificacao(['TipoDeEvento' => 3, 'Action' => 1]))[0]);
