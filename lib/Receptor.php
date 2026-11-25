@@ -10,6 +10,7 @@ final class Receptor
     /** @var callable */ private $verificar;
     /** @var callable */ private $confirmar;
     /** @var callable */ private $aoReceber;
+    /** @var callable */ private $enviar;
 
     /**
      * $cfg: token, topicos (array), confirmarAutomaticamente (bool), aceitarSemAssinatura (bool)
@@ -22,10 +23,12 @@ final class Receptor
         $this->confirmar = $deps['confirmar'] ?? fn(array $m) => Sns::confirmarInscricao($m, [Sns::class, 'httpGet']);
         // Ponto para plugar o destino dos dados (planilha, banco, CRM...).
         $this->aoReceber = $deps['aoReceber'] ?? function (array $ev): void {};
+        // Envio HTTP usado no repasse: fn(string $url, string $corpo, array $cabecalhos): int (status HTTP)
+        $this->enviar = $deps['enviar'] ?? [self::class, 'postar'];
     }
 
     /** @return array{0:int,1:array} [status HTTP, corpo] */
-    public function processar(string $corpo, ?string $tipoNoCabecalho, ?string $tokenNaUrl): array
+    public function processar(string $corpo, ?string $tipoNoCabecalho, ?string $tokenNaUrl, array $cabecalhos = []): array
     {
         $token = (string)($this->cfg['token'] ?? '');
         if ($token !== '' && !hash_equals($token, (string)$tokenNaUrl)) {
@@ -85,6 +88,17 @@ final class Receptor
 
         if ($tipo !== 'Notification') return [400, ['erro' => 'Type não suportado']];
 
+        // 4) Evento do Trinks (nosso processamento) e 5) repasse a outros sistemas (ex.: Retorne)
+        $resultado = $this->processarEvento($m);
+        if (!$this->repassar($m, $corpo, $cabecalhos)) {
+            // 500 faz o SNS reenviar. Do nosso lado o evento duplicado é ignorado; o repasse é tentado de novo.
+            return [500, ['erro' => 'falha ao repassar']];
+        }
+        return $resultado;
+    }
+
+    private function processarEvento(array $m): array
+    {
         // 4) Evento do Trinks
         try {
             $ev = Eventos::ler($m);
@@ -110,5 +124,74 @@ final class Receptor
 
         $this->dados->log('info', 'evento recebido', ['evento' => $ev['evento'], 'acao' => $ev['acao'], 'id' => $ev['idUnico']]);
         return [200, ['ok' => true, 'evento' => $ev['evento'], 'acao' => $ev['acao']]];
+    }
+
+    /** Destinos configurados em 'repassarPara' (só https). */
+    private function destinos(): array
+    {
+        $d = $this->cfg['repassarPara'] ?? [];
+        $d = is_string($d) ? [$d] : (is_array($d) ? $d : []);
+        return array_values(array_filter($d, fn($u) => is_string($u) && str_starts_with($u, 'https://')));
+    }
+
+    /**
+     * Repassa a mensagem SNS, byte a byte, para cada destino. A assinatura original continua válida,
+     * porque ela cobre o conteúdo da mensagem e não o endereço de entrega.
+     * Cada destino recebe cada MessageId uma única vez (controle em repassados.txt).
+     */
+    private function repassar(array $m, string $corpo, array $cabecalhos): bool
+    {
+        $id = (string)($m['MessageId'] ?? '');
+        $tudoOk = true;
+        foreach ($this->destinos() as $url) {
+            $chave = substr(hash('sha256', $url), 0, 12) . ' ' . $id;
+            if ($this->dados->jaRepassado($chave)) continue;
+            $h = array_filter([
+                'Content-Type' => 'text/plain; charset=UTF-8',
+                'x-amz-sns-message-type' => $m['Type'] ?? null,
+                'x-amz-sns-message-id' => $id,
+                'x-amz-sns-topic-arn' => $m['TopicArn'] ?? null,
+                'x-amz-sns-subscription-arn' => $cabecalhos['x-amz-sns-subscription-arn'] ?? null,
+                'x-amz-sns-rawdelivery' => $cabecalhos['x-amz-sns-rawdelivery'] ?? null,
+                'User-Agent' => $cabecalhos['user-agent'] ?? 'Amazon Simple Notification Service Agent',
+            ]);
+            try {
+                $status = ($this->enviar)($url, $corpo, $h);
+            } catch (Throwable $e) {
+                $status = 0;
+                $this->dados->log('erro', 'repasse falhou', ['destino' => parse_url($url, PHP_URL_HOST), 'erro' => $e->getMessage(), 'messageId' => $id]);
+            }
+            if ($status >= 200 && $status < 300) {
+                $this->dados->marcarRepassado($chave);
+                $this->dados->log('info', 'repassado', ['destino' => parse_url($url, PHP_URL_HOST), 'status' => $status, 'messageId' => $id]);
+            } else {
+                $tudoOk = false;
+                if ($status) $this->dados->log('erro', 'repasse recusado', ['destino' => parse_url($url, PHP_URL_HOST), 'status' => $status, 'messageId' => $id]);
+            }
+        }
+        return $tudoOk;
+    }
+
+    public static function postar(string $url, string $corpo, array $cabecalhos): int
+    {
+        $ch = curl_init($url);
+        $linhas = [];
+        foreach ($cabecalhos as $k => $v) $linhas[] = "$k: $v";
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => $corpo,
+            CURLOPT_HTTPHEADER => $linhas,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 10,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_PROTOCOLS => CURLPROTO_HTTPS,
+        ]);
+        curl_exec($ch);
+        $erro = curl_error($ch);
+        $status = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        curl_close($ch);
+        if ($status === 0) throw new RuntimeException($erro ?: 'sem resposta');
+        return $status;
     }
 }

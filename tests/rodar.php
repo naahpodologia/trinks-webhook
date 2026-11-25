@@ -162,6 +162,64 @@ teste('Message ilegível responde 200 sem quebrar', function () use ($enviar) {
     [$s, $b] = $enviar($r, $m); igual(200, $s); igual(false, $b['ok']);
 });
 
+// ---- Repasse (ex.: Retorne) ----
+teste('sem repassarPara nada é repassado', function () use ($enviar) {
+    $chamadas = 0;
+    [$r] = receptor([], ['enviar' => function () use (&$chamadas) { $chamadas++; return 200; }]);
+    igual(200, $enviar($r, notificacao(['TipoDeEvento' => 3, 'Action' => 1]))[0]); igual(0, $chamadas);
+});
+teste('repassa a mensagem idêntica, com a assinatura original válida', function () use ($baixar) {
+    $recebido = null;
+    [$r] = receptor(['repassarPara' => ['https://retorne.exemplo/webhook']], ['enviar' => function ($url, $corpo, $h) use (&$recebido) {
+        $recebido = [$url, $corpo, $h]; return 200; }]);
+    $m = notificacao(payload('01-fechamento-de-conta.json'));
+    $corpo = json_encode($m);
+    [$s] = $r->processar($corpo, 'Notification', null, ['x-amz-sns-subscription-arn' => 'arn:sub', 'user-agent' => 'Amazon Simple Notification Service Agent']);
+    igual(200, $s);
+    igual('https://retorne.exemplo/webhook', $recebido[0]);
+    igual($corpo, $recebido[1], 'corpo alterado');
+    igual('Notification', $recebido[2]['x-amz-sns-message-type']);
+    igual($m['MessageId'], $recebido[2]['x-amz-sns-message-id']);
+    igual('arn:sub', $recebido[2]['x-amz-sns-subscription-arn']);
+    igual([true, null], Sns::verificar(json_decode($recebido[1], true), $baixar), 'assinatura não confere no destino');
+});
+teste('não repassa confirmação de inscrição', function () use ($enviar) {
+    $chamadas = 0;
+    [$r] = receptor(['repassarPara' => 'https://retorne.exemplo/w'], ['enviar' => function () use (&$chamadas) { $chamadas++; return 200; }]);
+    igual(200, $enviar($r, confirmacao())[0]); igual(0, $chamadas);
+});
+teste('Retorne fora do ar: 500, e no reenvio repassa sem duplicar do nosso lado', function () use ($enviar) {
+    $status = 503; $chamadas = 0;
+    [$r, , $rec] = receptor(['repassarPara' => ['https://retorne.exemplo/w']], ['enviar' => function () use (&$status, &$chamadas) { $chamadas++; return $status; }]);
+    $m = notificacao(['TipoDeEvento' => 11, 'Action' => 1]);
+    igual(500, $enviar($r, $m)[0]);
+    $status = 200;
+    [$s, $b] = $enviar($r, $m);
+    igual(200, $s); igual(true, $b['duplicado'] ?? false); igual(1, count($rec)); igual(2, $chamadas);
+    $enviar($r, $m); igual(2, $chamadas, 'repassou duas vezes a mesma mensagem');
+});
+teste('erro de rede no repasse também dá 500', function () use ($enviar) {
+    [$r] = receptor(['repassarPara' => ['https://retorne.exemplo/w']], ['enviar' => function () { throw new RuntimeException('timeout'); }]);
+    igual(500, $enviar($r, notificacao(['TipoDeEvento' => 3, 'Action' => 1]))[0]);
+});
+teste('repassa mesmo evento que não conseguimos ler', function () {
+    $chamadas = 0;
+    [$r] = receptor(['repassarPara' => ['https://retorne.exemplo/w']], ['enviar' => function () use (&$chamadas) { $chamadas++; return 200; }]);
+    $m = assinar(['Type' => 'Notification', 'MessageId' => 'q', 'TopicArn' => TOPICO, 'Message' => 'formato novo', 'Timestamp' => 't']);
+    igual(200, $r->processar(json_encode($m), 'Notification', null)[0]); igual(1, $chamadas);
+});
+teste('ignora destino que não é https', function () use ($enviar) {
+    $chamadas = 0;
+    [$r] = receptor(['repassarPara' => ['http://inseguro.exemplo/w']], ['enviar' => function () use (&$chamadas) { $chamadas++; return 200; }]);
+    $enviar($r, notificacao(['TipoDeEvento' => 3, 'Action' => 1])); igual(0, $chamadas);
+});
+teste('mensagem com assinatura inválida não é repassada', function () use ($enviar) {
+    $chamadas = 0;
+    [$r] = receptor(['repassarPara' => ['https://retorne.exemplo/w']], ['enviar' => function () use (&$chamadas) { $chamadas++; return 200; }]);
+    $m = notificacao(['TipoDeEvento' => 1, 'Action' => 1]); $m['Message'] = '{}';
+    igual(403, $enviar($r, $m)[0]); igual(0, $chamadas);
+});
+
 // ---- HTTP de verdade (php -S) com o index.php ----
 teste('index.php: health, 404, token e evento', function () {
     $home = pastaTemp(); mkdir("$home/trinks-webhook");

@@ -18,6 +18,20 @@ Roda em qualquer hospedagem com PHP 8.0 ou mais novo, com as extensões `openssl
 
 Para mandar os dados para outro lugar (planilha, banco, CRM), plugue uma função `aoReceber` no `Receptor` (veja `lib/Receptor.php`).
 
+## Repasse para outro sistema (ex.: Retorne)
+
+O Trinks só aceita uma URL de webhook por franquia. Se outro sistema já usa essa URL, o receptor pode ficar no meio: grava a mensagem e a repassa, **sem alterar nenhum byte**, para o outro sistema. A assinatura da AWS continua válida no destino, porque ela cobre o conteúdo da mensagem e não o endereço.
+
+Para ligar, coloque no `config.php`:
+
+```php
+'repassarPara' => ['https://url-do-retorne/aqui'],
+```
+
+- Só mensagens com assinatura válida são repassadas. Pedidos de confirmação de inscrição não são repassados.
+- Se o destino estiver fora do ar ou responder erro, o receptor responde 500 ao SNS, que reenvia mais tarde. Do nosso lado o evento não é gravado duas vezes, e cada destino recebe cada mensagem uma vez só (`repassados.txt`).
+- Cada repasse fica registrado no log do dia.
+
 ## Endereços
 
 - Webhook: `POST https://<subdominio>/webhook?token=<token>`
@@ -30,7 +44,7 @@ Copie `config.exemplo.php` para **`/home/<usuario>/trinks-webhook/config.php`**,
 ## Testar
 
 ```bash
-php tests/rodar.php     # 20 testes, inclusive um servidor HTTP de verdade
+php tests/rodar.php     # 28 testes, inclusive um servidor HTTP de verdade
 ```
 
 O `.htaccess` bloqueia o acesso pela web a `lib/`, `tests/`, configuração e arquivos de dados.

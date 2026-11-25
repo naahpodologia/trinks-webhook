@@ -16,6 +16,10 @@ return [
     // Confirmar a inscrição sozinho quando o Trinks cadastrar a URL
     'confirmarAutomaticamente' => true,
 
+    // Repassar cada evento, sem alteração, para outros sistemas que também usam o webhook do Trinks
+    // (ex.: Retorne). Só https. Vazio = não repassa.
+    // 'repassarPara' => ['https://url-do-retorne/aqui'],
+
     // SOMENTE PARA TESTE: aceita mensagens sem assinatura. Nunca deixe true em produção.
     'aceitarSemAssinatura' => false,
 ];
