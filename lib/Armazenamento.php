@@ -3,6 +3,7 @@
 // <dados>/eventos/AAAA-MM-DD/<evento>.jsonl  -> eventos organizados
 // <dados>/sns/AAAA-MM-DD.jsonl               -> toda mensagem SNS recebida (auditoria)
 // <dados>/vistos.txt                         -> ids já processados (o SNS pode reenviar)
+// <dados>/banco-pendentes.jsonl              -> eventos que o banco não aceitou na hora (gravados depois)
 
 final class Armazenamento
 {
@@ -69,5 +70,58 @@ final class Armazenamento
     public function log(string $nivel, string $msg, array $extra = []): void
     {
         $this->anexar($this->pasta . '/log/' . $this->dia() . '.jsonl', ['em' => gmdate('c'), 'nivel' => $nivel, 'msg' => $msg] + $extra);
+    }
+
+    // ---- fila de eventos à espera do banco
+
+    public function adicionarPendenteBanco(array $ev): void
+    {
+        $this->anexar($this->pasta . '/banco-pendentes.jsonl', $ev);
+    }
+
+    /**
+     * Passa cada pendente para $gravar. Os que forem gravados saem da fila; se $gravar lançar erro
+     * ou devolver false, o restante continua na fila.
+     * @param callable(array):bool $gravar
+     */
+    public function consumirPendentesBanco(callable $gravar): void
+    {
+        $arq = $this->pasta . '/banco-pendentes.jsonl';
+        if (!is_file($arq) || filesize($arq) === 0) return;
+        $h = fopen($arq, 'c+');
+        if (!$h || !flock($h, LOCK_EX | LOCK_NB)) { if ($h) fclose($h); return; } // outro processo já está cuidando
+        $linhas = [];
+        while (($l = fgets($h)) !== false) if (trim($l) !== '') $linhas[] = $l;
+        $resto = [];
+        $parar = false;
+        foreach ($linhas as $l) {
+            if (!$parar) {
+                $ev = json_decode($l, true);
+                if (!is_array($ev)) continue; // linha corrompida: descarta
+                try { if ($gravar($ev)) continue; } catch (Throwable $e) {}
+                $parar = true;
+            }
+            $resto[] = $l;
+        }
+        ftruncate($h, 0);
+        rewind($h);
+        fwrite($h, implode('', $resto));
+        fflush($h);
+        flock($h, LOCK_UN);
+        fclose($h);
+    }
+
+    public function quantidadePendentesBanco(): int
+    {
+        $arq = $this->pasta . '/banco-pendentes.jsonl';
+        return is_file($arq) ? count(array_filter(file($arq), fn($l) => trim($l) !== '')) : 0;
+    }
+
+    /** Arquivos <dados>/eventos/AAAA-MM-DD/*.jsonl em ordem de data. */
+    public function arquivosDeEventos(): array
+    {
+        $a = glob($this->pasta . '/eventos/*/*.jsonl') ?: [];
+        sort($a);
+        return $a;
     }
 }

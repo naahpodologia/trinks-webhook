@@ -20,6 +20,14 @@ return [
     // (ex.: Retorne). Só https. Vazio = não repassa.
     // 'repassarPara' => ['https://url-do-retorne/aqui'],
 
+    // Banco MySQL da Hostinger (hPanel > Bancos de dados). Sem este bloco, nada vai para o banco.
+    // 'banco' => [
+    //     'host' => 'localhost',
+    //     'nome' => 'u000000000_trinks',
+    //     'usuario' => 'u000000000_trinks',
+    //     'senha' => 'senha-do-banco',
+    // ],
+
     // SOMENTE PARA TESTE: aceita mensagens sem assinatura. Nunca deixe true em produção.
     'aceitarSemAssinatura' => false,
 ];

@@ -226,6 +226,86 @@ teste('mensagem com assinatura inválida não é repassada', function () use ($e
     igual(403, $enviar($r, $m)[0]); igual(0, $chamadas);
 });
 
+// ---- Banco MySQL ----
+// Rodam só com um MySQL de teste:  TRINKS_TESTE_MYSQL="localhost;banco;usuario;senha" php tests/rodar.php
+$mysql = getenv('TRINKS_TESTE_MYSQL') ?: '';
+if ($mysql === '') {
+    echo "--   testes de banco pulados (defina TRINKS_TESTE_MYSQL)\n";
+} else {
+    [$h, $n, $u, $sn] = explode(';', $mysql) + [null, null, null, ''];
+    $cfgBanco = ['host' => $h, 'nome' => $n, 'usuario' => $u, 'senha' => $sn];
+    $limpar = function () use ($cfgBanco) {
+        $pdo = (new Banco($cfgBanco))->pdo();
+        foreach ($pdo->query("SHOW TABLES LIKE 'trinks\\_%'")->fetchAll(PDO::FETCH_COLUMN) as $t) $pdo->exec("DROP TABLE $t");
+    };
+    $q = fn(string $sql) => (new Banco($cfgBanco))->pdo()->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+
+    teste('banco: grava os 4 exemplos nas tabelas organizadas', function () use ($enviar, $cfgBanco, $limpar, $q) {
+        $limpar();
+        $d = new Armazenamento(pastaTemp());
+        $r = new Receptor(['aceitarSemAssinatura' => true, 'banco' => $cfgBanco], $d);
+        foreach (glob(__DIR__ . '/payloads/*.json') as $arq) igual(200, $enviar($r, notificacao(payload(basename($arq))))[0]);
+        igual(4, count($q('SELECT * FROM trinks_eventos')));
+        $v = $q('SELECT * FROM trinks_vendas')[0];
+        igual('180.00', $v['valor_compra']); igual('2026-11-24 10:15:15', $v['data_fechamento']); igual('Cliente Exemplo', $v['cliente_nome']);
+        igual(2, count($q('SELECT * FROM trinks_venda_itens WHERE id_transacao = 778899')));
+        igual('Visa', $q('SELECT forma_pagamento FROM trinks_venda_pagamentos')[0]['forma_pagamento']);
+        $c = $q('SELECT * FROM trinks_clientes ORDER BY id_cliente_estabelecimento');
+        igual(2, count($c)); igual('São Paulo', $c[0]['cidade']); igual('Google', $c[1]['como_nos_conheceu']); igual('(11) 91111-1111', $c[1]['telefone']);
+        $e = $q('SELECT * FROM trinks_estoque_movimentacoes')[0];
+        igual('-1.000', $e['quantidade']); igual('1234.000', $e['estoque_apos']); igual('13.50', $e['custo_total']); igual('445566', (string)$e['id_agendamento']);
+        $a = $q('SELECT * FROM trinks_agendamentos')[0];
+        igual('2026-11-28 14:00:00', $a['inicio']); igual('Agendado', $a['status']);
+        igual('Cliente Exemplo', json_decode($q("SELECT payload FROM trinks_eventos WHERE evento = 'fechamento-de-conta'")[0]['payload'], true)['NomeDoCliente']);
+    });
+    teste('banco: reenvio e alterações não duplicam; vazio não apaga', function () use ($cfgBanco, $limpar, $q) {
+        $limpar();
+        $b = new Banco($cfgBanco);
+        $ev = Eventos::ler(['MessageId' => 'a1', 'Message' => json_encode(payload('01-fechamento-de-conta.json'))]);
+        $b->gravar($ev); $b->gravar($ev);
+        igual(1, count($q('SELECT * FROM trinks_eventos'))); igual(2, count($q('SELECT * FROM trinks_venda_itens')));
+        $alt = payload('03-inclusao-de-cliente.json'); $alt['TipoDeEvento'] = 4; $alt['Action'] = 2;
+        $alt['IdDoClienteNoEstabelecimento'] = 5501; $alt['Email'] = ''; $alt['Nome'] = 'Nome Novo';
+        $b->gravar(Eventos::ler(['MessageId' => 'a2', 'Message' => json_encode($alt)]));
+        $c = $q('SELECT * FROM trinks_clientes WHERE id_cliente_estabelecimento = 5501')[0];
+        igual('Nome Novo', $c['nome']); igual('cliente@exemplo.com', $c['email'], 'e-mail vazio apagou o antigo');
+    });
+    teste('banco: estorno marca a venda', function () use ($cfgBanco, $limpar, $q) {
+        $limpar();
+        $b = new Banco($cfgBanco);
+        $b->gravar(Eventos::ler(['MessageId' => 'f', 'Message' => json_encode(payload('01-fechamento-de-conta.json'))]));
+        $b->gravar(Eventos::ler(['MessageId' => 'e', 'Message' => json_encode(['TipoDeEvento' => 2, 'Action' => 9, 'IdDaTransacao' => 778899, 'DataDoEstorno' => '2026-11-25 09:00:00'])]));
+        $v = $q('SELECT * FROM trinks_vendas')[0];
+        igual(1, (int)$v['estornada']); igual('2026-11-25 09:00:00', $v['data_estorno']); igual('180.00', $v['valor_compra']);
+    });
+    teste('banco fora do ar: responde 200, repassa ao Retorne e grava depois', function () use ($enviar, $cfgBanco, $limpar, $q) {
+        $limpar();
+        $d = new Armazenamento(pastaTemp());
+        $repasses = 0;
+        $ruim = new Receptor(['aceitarSemAssinatura' => true, 'repassarPara' => ['https://retorne.exemplo/w'],
+            'banco' => ['host' => '127.0.0.1', 'nome' => 'nao_existe', 'usuario' => 'x', 'senha' => 'errada']], $d,
+            ['enviar' => function () use (&$repasses) { $repasses++; return 200; }]);
+        $t0 = microtime(true);
+        [$s, $b] = $enviar($ruim, notificacao(payload('03-inclusao-de-cliente.json')));
+        igual(200, $s); igual(true, $b['ok']); igual(1, $repasses);
+        verdade(microtime(true) - $t0 < 5, 'demorou demais com o banco fora do ar');
+        igual(1, $d->quantidadePendentesBanco());
+        // O banco volta: o próximo evento grava ele e o pendente
+        $bom = new Receptor(['aceitarSemAssinatura' => true, 'banco' => $cfgBanco], $d);
+        igual(200, $enviar($bom, notificacao(payload('01-fechamento-de-conta.json')))[0]);
+        igual(0, $d->quantidadePendentesBanco()); igual(2, count($q('SELECT * FROM trinks_eventos')));
+    });
+    teste('banco: importar copia eventos antigos dos arquivos, sem duplicar', function () use ($enviar, $cfgBanco, $limpar, $q) {
+        $limpar();
+        $d = new Armazenamento(pastaTemp());
+        $semBanco = new Receptor(['aceitarSemAssinatura' => true], $d);
+        foreach (glob(__DIR__ . '/payloads/*.json') as $arq) $enviar($semBanco, notificacao(payload(basename($arq))));
+        $g = GravadorBanco::daConfig(['banco' => $cfgBanco], $d);
+        igual(4, $g->importar()['eventos']); $g->importar();
+        igual(4, count($q('SELECT * FROM trinks_eventos'))); igual(1, count($q('SELECT * FROM trinks_vendas')));
+    });
+}
+
 // ---- HTTP de verdade (php -S) com o index.php ----
 teste('index.php: health, 404, token e evento', function () {
     $home = pastaTemp(); mkdir("$home/trinks-webhook");

@@ -4,6 +4,7 @@
 require_once __DIR__ . '/Sns.php';
 require_once __DIR__ . '/Eventos.php';
 require_once __DIR__ . '/Armazenamento.php';
+require_once __DIR__ . '/GravadorBanco.php';
 
 final class Receptor
 {
@@ -11,10 +12,11 @@ final class Receptor
     /** @var callable */ private $confirmar;
     /** @var callable */ private $aoReceber;
     /** @var callable */ private $enviar;
+    private ?GravadorBanco $banco;
 
     /**
      * $cfg: token, topicos (array), confirmarAutomaticamente (bool), aceitarSemAssinatura (bool)
-     * $deps: verificar(array):array, confirmar(array):array, aoReceber(array):void
+     * $deps: verificar(array):array, confirmar(array):array, aoReceber(array):void, banco (GravadorBanco|null)
      */
     public function __construct(private array $cfg, private Armazenamento $dados, array $deps = [])
     {
@@ -25,6 +27,8 @@ final class Receptor
         $this->aoReceber = $deps['aoReceber'] ?? function (array $ev): void {};
         // Envio HTTP usado no repasse: fn(string $url, string $corpo, array $cabecalhos): int (status HTTP)
         $this->enviar = $deps['enviar'] ?? [self::class, 'postar'];
+        // Banco MySQL (opcional; ligado quando 'banco' estiver no config.php)
+        $this->banco = array_key_exists('banco', $deps) ? $deps['banco'] : GravadorBanco::daConfig($cfg, $dados);
     }
 
     /** @return array{0:int,1:array} [status HTTP, corpo] */
@@ -89,14 +93,19 @@ final class Receptor
         if ($tipo !== 'Notification') return [400, ['erro' => 'Type não suportado']];
 
         // 4) Evento do Trinks (nosso processamento) e 5) repasse a outros sistemas (ex.: Retorne)
-        $resultado = $this->processarEvento($m);
-        if (!$this->repassar($m, $corpo, $cabecalhos)) {
+        [$resultado, $evNovo] = $this->processarEvento($m);
+        $repassou = $this->repassar($m, $corpo, $cabecalhos);
+        // 6) Banco MySQL: só depois do repasse, e uma falha aqui nunca muda a resposta
+        //    (o evento fica na fila de pendentes e é gravado depois).
+        if ($evNovo && $this->banco) $this->banco->gravar($evNovo);
+        if (!$repassou) {
             // 500 faz o SNS reenviar. Do nosso lado o evento duplicado é ignorado; o repasse é tentado de novo.
             return [500, ['erro' => 'falha ao repassar']];
         }
         return $resultado;
     }
 
+    /** @return array{0:array,1:?array} [[status, corpo], evento novo gravado (ou null)] */
     private function processarEvento(array $m): array
     {
         // 4) Evento do Trinks
@@ -105,11 +114,11 @@ final class Receptor
         } catch (Throwable $e) {
             // Erro permanente: 200 para o SNS não reenviar sem fim. A mensagem crua já foi gravada.
             $this->dados->log('erro', 'evento ilegível', ['erro' => $e->getMessage(), 'messageId' => $m['MessageId'] ?? null]);
-            return [200, ['ok' => false, 'erro' => 'evento ilegível']];
+            return [[200, ['ok' => false, 'erro' => 'evento ilegível']], null];
         }
 
         if ($this->dados->jaVisto($ev['idUnico'])) {
-            return [200, ['ok' => true, 'duplicado' => true]];
+            return [[200, ['ok' => true, 'duplicado' => true]], null];
         }
 
         try {
@@ -119,11 +128,11 @@ final class Receptor
         } catch (Throwable $e) {
             // Erro temporário: 500 faz o SNS tentar de novo.
             $this->dados->log('erro', 'falha ao processar evento', ['erro' => $e->getMessage(), 'id' => $ev['idUnico']]);
-            return [500, ['erro' => 'falha ao processar']];
+            return [[500, ['erro' => 'falha ao processar']], null];
         }
 
         $this->dados->log('info', 'evento recebido', ['evento' => $ev['evento'], 'acao' => $ev['acao'], 'id' => $ev['idUnico']]);
-        return [200, ['ok' => true, 'evento' => $ev['evento'], 'acao' => $ev['acao']]];
+        return [[200, ['ok' => true, 'evento' => $ev['evento'], 'acao' => $ev['acao']]], $ev];
     }
 
     /** Destinos configurados em 'repassarPara' (só https). */
