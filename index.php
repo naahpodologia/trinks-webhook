@@ -2,6 +2,8 @@
 // Receptor do webhook do Trinks (Amazon SNS) para a Naah Podologia.
 // Endpoint:  POST https://<subdominio>/webhook?token=<token>
 // Saúde:     GET  https://<subdominio>/health
+// Banco:     GET  https://<subdominio>/banco?token=<token>            (situação do banco)
+//            GET  https://<subdominio>/banco/importar?token=<token>   (copia para o banco os eventos já guardados em arquivo)
 
 declare(strict_types=1);
 require_once __DIR__ . '/lib/Config.php';
@@ -25,6 +27,31 @@ if ($caminho === '/health' && $metodo === 'GET') {
         responder(200, ['ok' => true]);
     } catch (Throwable $e) {
         responder(500, ['ok' => false, 'erro' => 'pasta de dados indisponível']);
+    }
+    exit;
+}
+
+if (($caminho === '/banco' || $caminho === '/banco/importar') && $metodo === 'GET') {
+    $token = (string)($cfg['token'] ?? '');
+    if ($token === '' || !hash_equals($token, (string)($_GET['token'] ?? ''))) { responder(401, ['erro' => 'token inválido']); exit; }
+    if (!Banco::configurado($cfg)) { responder(200, ['banco' => 'não configurado no config.php']); exit; }
+    try {
+        $dados = new Armazenamento($cfg['pastaDados']);
+        $g = GravadorBanco::daConfig($cfg, $dados);
+        if ($caminho === '/banco/importar') {
+            @set_time_limit(300);
+            responder(200, ['ok' => true, 'importados' => $g->importar(), 'pendentes' => $dados->quantidadePendentesBanco()]);
+        } else {
+            $g->reprocessarPendentes();
+            $pdo = (new Banco($cfg['banco'], $dados->pasta()))->pdo();
+            $contagem = [];
+            foreach (['trinks_eventos', 'trinks_clientes', 'trinks_vendas', 'trinks_agendamentos', 'trinks_profissionais', 'trinks_estoque_movimentacoes'] as $t) {
+                $contagem[$t] = (int)$pdo->query("SELECT COUNT(*) FROM $t")->fetchColumn();
+            }
+            responder(200, ['ok' => true, 'banco' => 'conectado', 'registros' => $contagem, 'pendentes' => $dados->quantidadePendentesBanco()]);
+        }
+    } catch (Throwable $e) {
+        responder(500, ['ok' => false, 'banco' => 'erro', 'erro' => GravadorBanco::resumirErro($e)]);
     }
     exit;
 }
