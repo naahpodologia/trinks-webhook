@@ -67,6 +67,15 @@ final class Armazenamento
         $this->anexar($this->pasta . '/inscricoes.jsonl', ['em' => gmdate('c')] + $info);
     }
 
+    /** Contato do WhatsApp vindo de anúncio. A Meta pode reenviar: o mesmo id de mensagem é gravado uma vez só. */
+    public function salvarWhatsApp(array $contato): void
+    {
+        $id = (string)($contato['idMensagem'] ?? '');
+        if ($id !== '' && $this->contem('whatsapp-vistos.txt', $id)) return;
+        $this->anexar($this->pasta . '/whatsapp/' . $this->dia() . '.jsonl', $contato);
+        if ($id !== '') file_put_contents($this->pasta . '/whatsapp-vistos.txt', $id . "\n", FILE_APPEND | LOCK_EX);
+    }
+
     public function log(string $nivel, string $msg, array $extra = []): void
     {
         $this->anexar($this->pasta . '/log/' . $this->dia() . '.jsonl', ['em' => gmdate('c'), 'nivel' => $nivel, 'msg' => $msg] + $extra);

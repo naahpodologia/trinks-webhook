@@ -4,6 +4,7 @@
 // Saúde:     GET  https://<subdominio>/health
 // Banco:     GET  https://<subdominio>/banco?token=<token>            (situação do banco)
 //            GET  https://<subdominio>/banco/importar?token=<token>   (copia para o banco os eventos já guardados em arquivo)
+// WhatsApp:  GET/POST https://<subdominio>/whatsapp   (webhook da Meta; só com o bloco whatsapp no config.php)
 
 declare(strict_types=1);
 require_once __DIR__ . '/lib/Config.php';
@@ -52,6 +53,29 @@ if (($caminho === '/banco' || $caminho === '/banco/importar') && $metodo === 'GE
         }
     } catch (Throwable $e) {
         responder(500, ['ok' => false, 'banco' => 'erro', 'erro' => GravadorBanco::resumirErro($e)]);
+    }
+    exit;
+}
+
+if ($caminho === '/whatsapp') {
+    require_once __DIR__ . '/lib/WhatsAppMeta.php';
+    try {
+        $wa = new WhatsAppMeta((array)($cfg['whatsapp'] ?? []), new Armazenamento($cfg['pastaDados']));
+        if (!$wa->configurado()) { responder(404, ['erro' => 'não encontrado']); exit; }
+        if ($metodo === 'GET') {
+            [$status, $texto] = $wa->verificar($_GET);
+            http_response_code($status);
+            header('Content-Type: text/plain; charset=utf-8');
+            echo $texto;
+            exit;
+        }
+        if ($metodo !== 'POST') { responder(405, ['erro' => 'use POST']); exit; }
+        $corpo = file_get_contents('php://input', false, null, 0, 1024 * 1024) ?: '';
+        [$status, $resposta] = $wa->processar($corpo, $_SERVER['HTTP_X_HUB_SIGNATURE_256'] ?? null);
+        responder($status, $resposta);
+    } catch (Throwable $e) {
+        error_log('trinks-webhook whatsapp: ' . $e->getMessage());
+        responder(500, ['erro' => 'erro interno']);
     }
     exit;
 }

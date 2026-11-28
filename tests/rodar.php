@@ -306,6 +306,51 @@ if ($mysql === '') {
     });
 }
 
+
+// ---- WhatsApp (Meta) ----
+require_once __DIR__ . '/../lib/WhatsAppMeta.php';
+function avisoWhatsApp(string $texto, string $id = 'wamid.1'): array {
+    return ['object' => 'whatsapp_business_account', 'entry' => [['id' => 'WABA', 'changes' => [['field' => 'messages', 'value' => [
+        'messaging_product' => 'whatsapp', 'metadata' => ['display_phone_number' => '552120519674', 'phone_number_id' => '1'],
+        'contacts' => [['profile' => ['name' => 'Fulana'], 'wa_id' => '5521999998888']],
+        'messages' => [['from' => '5521999998888', 'id' => $id, 'timestamp' => '1795833600', 'type' => 'text', 'text' => ['body' => $texto]]],
+    ]]]]]];
+}
+teste('whatsapp: lê código curto e frase pronta', function () {
+    igual('A7K3', WhatsAppMeta::codigo('Olá! Quero uma avaliação da minha unha (A7K3)'));
+    igual('A7K3', WhatsAppMeta::codigo('ola (a7k3)'));
+    igual(null, WhatsAppMeta::codigo('Oi (AI10)'), 'caracteres ambíguos');
+    igual(null, WhatsAppMeta::codigo('Oi, tudo bem?'));
+    verdade(WhatsAppMeta::frasePronta('Olá!  Quero marcar uma avaliação dos meus pés'));
+    verdade(!WhatsAppMeta::frasePronta('Oi, quanto custa?'));
+});
+teste('whatsapp: guarda só contato de anúncio, sem o texto', function () {
+    $c = WhatsAppMeta::contatos(avisoWhatsApp('Olá! Quero uma avaliação de micose (B2C4)'));
+    igual(1, count($c));
+    igual('+5521999998888', $c[0]['telefone']);
+    igual('B2C4', $c[0]['codigo']);
+    igual(true, $c[0]['frasePronta']);
+    igual('2026-11-27 23:40:00-03:00', $c[0]['recebidoEm']);
+    verdade(!str_contains(json_encode($c), 'micose'), 'texto da mensagem foi guardado');
+    igual([], WhatsAppMeta::contatos(avisoWhatsApp('Bom dia, meu pé está doendo')));
+});
+teste('whatsapp: verificação do webhook', function () {
+    $wa = new WhatsAppMeta(['verifyToken' => 'vt', 'appSecret' => 's'], new Armazenamento(pastaTemp()));
+    igual([200, '123'], $wa->verificar(['hub_mode' => 'subscribe', 'hub_verify_token' => 'vt', 'hub_challenge' => '123']));
+    igual(403, $wa->verificar(['hub_mode' => 'subscribe', 'hub_verify_token' => 'x', 'hub_challenge' => '123'])[0]);
+});
+teste('whatsapp: confere assinatura e não duplica reenvio', function () {
+    $dados = new Armazenamento($pasta = pastaTemp());
+    $wa = new WhatsAppMeta(['verifyToken' => 'vt', 'appSecret' => 'segredo'], $dados);
+    $corpo = json_encode(avisoWhatsApp('Olá! Quero uma avaliação (A7K3)'));
+    igual(403, $wa->processar($corpo, 'sha256=errada')[0]);
+    $sig = 'sha256=' . hash_hmac('sha256', $corpo, 'segredo');
+    igual([200, ['ok' => true, 'guardados' => 1]], $wa->processar($corpo, $sig));
+    $wa->processar($corpo, $sig);
+    $linhas = file(glob("$pasta/whatsapp/*.jsonl")[0]);
+    igual(1, count($linhas), 'reenvio duplicou');
+});
+
 // ---- HTTP de verdade (php -S) com o index.php ----
 teste('index.php: health, 404, token e evento', function () {
     $home = pastaTemp(); mkdir("$home/trinks-webhook");
@@ -328,6 +373,7 @@ teste('index.php: health, 404, token e evento', function () {
         [$s, $b] = $req('POST', '/webhook?token=tk123', $msg);
         igual(200, $s); igual('inclusao-de-cliente', $b['evento']);
         verdade(is_dir("$home/trinks-webhook/dados/eventos"), 'dados não gravados fora da pasta pública');
+        igual(404, $req('GET', '/whatsapp')[0], 'whatsapp sem configuração');
     } finally { proc_terminate($proc); }
 });
 
