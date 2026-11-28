@@ -67,7 +67,16 @@ final class WhatsAppMeta
             $this->dados->salvarWhatsApp($c);
             $guardados++;
         }
+        // Registro mínimo para diagnóstico: só contagens, nunca telefone nem texto.
+        $this->dados->log('info', 'whatsapp: aviso recebido', ['mensagens' => self::contarMensagens($json), 'guardados' => $guardados]);
         return [200, ['ok' => true, 'guardados' => $guardados]];
+    }
+
+    public static function contarMensagens(array $json): int
+    {
+        $n = 0;
+        foreach ($json['entry'] ?? [] as $e) foreach ($e['changes'] ?? [] as $m) $n += count((array)($m['value']['messages'] ?? []));
+        return $n;
     }
 
     /** Extrai das mensagens recebidas só os contatos que vieram de anúncio (código ou frase pronta). */
