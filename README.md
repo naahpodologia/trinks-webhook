@@ -87,6 +87,25 @@ vendas = pd.read_sql("SELECT * FROM trinks_vendas WHERE estornada = 0", con)
 print(vendas.groupby(vendas.data_fechamento.dt.to_period("M")).total_recebido.sum())
 ```
 
+## WhatsApp (Meta): ligar o contato ao anúncio
+
+O endereço `/whatsapp` recebe da Meta o aviso de mensagem recebida no WhatsApp da clínica, pelo mesmo mecanismo que a Retorne usa (um app nosso inscrito na mesma conta do WhatsApp Business). Ele **só lê**: não envia mensagem nem muda nada na conta.
+
+- Guarda só os contatos que vieram de anúncio: mensagem com o código curto (ex.: `(A7K3)`) ou com a frase pronta do site ("Olá! Quero uma avaliação...", "Olá! Quero marcar uma avaliação...").
+- **O texto da mensagem é descartado.** Ficam telefone (+55...), hora (Brasília), código, se usou frase pronta e o número da clínica.
+- Grava em `dados/whatsapp/AAAA-MM-DD.jsonl`. Reenvios da Meta não duplicam (`whatsapp-vistos.txt`).
+- Confere a assinatura `X-Hub-Signature-256` com a chave secreta do app. Sem assinatura válida, 403.
+- Sem o bloco `whatsapp` no `config.php`, o endereço responde 404 (desligado).
+
+```php
+'whatsapp' => [
+    'verifyToken' => 'senha-que-voce-inventa',   // a mesma do painel da Meta
+    'appSecret' => 'chave-secreta-do-app',        // Configurações do app > Básico
+],
+```
+
+No app da Meta: WhatsApp > Configuração > Webhook, URL `https://<subdominio>/whatsapp`, token de verificação igual ao `verifyToken`, e assinar só o campo `messages`. Nunca usar "override" de URL nem mexer na inscrição de outro app (Retorne).
+
 ## Repasse para outro sistema (ex.: Retorne)
 
 O Trinks só aceita uma URL de webhook por franquia. Se outro sistema já usa essa URL, o receptor pode ficar no meio: grava a mensagem e a repassa, **sem alterar nenhum byte**, para o outro sistema. A assinatura da AWS continua válida no destino, porque ela cobre o conteúdo da mensagem e não o endereço.
@@ -106,6 +125,7 @@ Para ligar, coloque no `config.php`:
 - Webhook: `POST https://<subdominio>/webhook?token=<token>`
 - Saúde: `GET https://<subdominio>/health` responde `{"ok":true}`
 - Banco: `GET https://<subdominio>/banco?token=<token>` e `/banco/importar?token=<token>` (veja acima)
+- WhatsApp (Meta): `GET/POST https://<subdominio>/whatsapp` (veja acima)
 
 ## Configuração
 
@@ -114,7 +134,7 @@ Copie `config.exemplo.php` para **`/home/<usuario>/trinks-webhook/config.php`**,
 ## Testar
 
 ```bash
-php tests/rodar.php     # 29 testes, inclusive um servidor HTTP de verdade
+php tests/rodar.php     # 33 testes, inclusive um servidor HTTP de verdade
 
 # Com um MySQL de teste, roda também os 5 testes do banco:
 TRINKS_TESTE_MYSQL="localhost;banco;usuario;senha" php tests/rodar.php

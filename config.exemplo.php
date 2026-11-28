@@ -28,6 +28,14 @@ return [
     //     'senha' => 'senha-do-banco',
     // ],
 
+    // Webhook do WhatsApp (Meta). Sem este bloco, o endereço /whatsapp responde 404.
+    // verifyToken: senha que você inventa e coloca também no painel do app da Meta.
+    // appSecret: "Chave secreta do app" (Meta for Developers > Configurações do app > Básico).
+    // 'whatsapp' => [
+    //     'verifyToken' => 'troque-por-uma-senha-longa',
+    //     'appSecret' => 'chave-secreta-do-app',
+    // ],
+
     // SOMENTE PARA TESTE: aceita mensagens sem assinatura. Nunca deixe true em produção.
     'aceitarSemAssinatura' => false,
 ];
